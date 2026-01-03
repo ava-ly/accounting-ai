@@ -1,33 +1,55 @@
+# import python's built-in logging module for logging messages
 import logging
+# import type hints `Any` (any type) and `Dict` (dictionary type)
 from typing import Any, Dict
 
+# import 'SystemMessage' class for system prompts in langchain
+# giving AI agent its job description and rules
 from langchain_core.messages import SystemMessage
+# import LangGraph components: 
+# 'StateGraph': Creates a map of how your agent processes information from start to finish
+# 'START': The entry point (when a user asks a question)
+# 'END': The exit point (when you deliver the final answer)
 from langgraph.graph import StateGraph, START, END
+# import 'ToolNode' for executing tools in the graph 
 from langgraph.prebuilt import ToolNode
 
+# import configuration settings and LLM creation function
 from config import Config, create_llm
+# import the system prompt text for the agent
 from prompts import SYSTEM_PROMPT
+# import custom types: 'AgentState' for state structure, 'RouteDecision' for routing
 from agent_types import AgentState, RouteDecision
 
 # Configure logging
+# set up basic logging configuration to INFO level
+# a system that tracks what the AI agent is doing behind the scenes
 logging.basicConfig(level=logging.INFO)
+# create logger instance named after the current module
 logger = logging.getLogger(__name__)
 
 
 class AccountingAgent:
     """Main accounting AI agent class."""
     
+    # constructor method, take 'debug_enabled' param, defaults to True
     def __init__(self, debug_enabled: bool = True):
         """Initialize the accounting agent.
         
         Args:
             debug_enabled: Whether to enable debug printing
         """
+        # store debug flag
         self.debug_enabled = debug_enabled
+        # create llm instance using imported function
         self.llm = create_llm()
+        # create toolnode with tools from Config
         self.tool_node = ToolNode(Config.TOOLS)
+        # build the workflow graph
         self.workflow = self._build_workflow()
+        # compile the graph into an executable agent
         self.agent_executor = self.workflow.compile()
+    
     
     def _build_workflow(self) -> StateGraph:
         """Build the agent workflow graph.
