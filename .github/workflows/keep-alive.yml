@@ -1,23 +1,28 @@
-name: Keep Supabase Alive
+name: Keep Supabase Alive (Heavy)
 
 on:
   schedule:
-    # Run at 00:00 UTC every Monday and Thursday (Every 3-4 days)
-    - cron: "0 0 * * 1,4"
-  # Allow running manually from GitHub UI for testing
+    # Run every Monday and Thursday
+    - cron: "0 0 * * 1,3,5"
   workflow_dispatch:
 
 jobs:
   ping-database:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake up Supabase
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install supabase python-dotenv
+
+      - name: Run Heartbeat
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: |
-          # Make a simple REST API call to fetch 1 ID from documents table
-          # This counts as "Database Usage"
-          curl -f -X GET "$SUPABASE_URL/rest/v1/documents?select=id&limit=1" \
-          -H "apikey: $SUPABASE_KEY" \
-          -H "Authorization: Bearer $SUPABASE_KEY"
+        run: python scripts/keep_alive.py
