@@ -50,30 +50,38 @@ class AccountingAgent:
         # compile the graph into an executable agent
         self.agent_executor = self.workflow.compile()
     
-    
+    # Method signature returning `StateGraph`
     def _build_workflow(self) -> StateGraph:
         """Build the agent workflow graph.
         
         Returns:
             Configured StateGraph instance
         """
+        # Creates a new StateGraph with `AgentState` as state type
         workflow = StateGraph(AgentState)
         
         # Add nodes
+        # Adds two nodes: "agent" (calls LLM) and "tools" (executes tools)
         workflow.add_node("agent", self._call_model)
         workflow.add_node("tools", self.tool_node)
         
         # Add edges
+        # Adds edge from START → "agent" (always starts with agent)
         workflow.add_edge(START, "agent")
+        # Adds conditional edge from "agent" → decides next step
+        # Calls `_should_continue` to decide, If returns "tools" → goes to tools node
+        # If returns "end" → goes to END
         workflow.add_conditional_edges(
             "agent",
             self._should_continue,
             {"tools": "tools", "end": END}
         )
+        # Adds edge from "tools" → "agent" (loop back after tools)
         workflow.add_edge("tools", "agent")
-        
+        # Returns the built workflow
         return workflow
     
+    # Method takes `AgentState`, returns dictionary
     def _call_model(self, state: AgentState) -> Dict[str, Any]:
         """Call the LLM model with the current state.
         
@@ -83,11 +91,13 @@ class AccountingAgent:
         Returns:
             Updated state with model response
         """
+        # Wraps in try-except for error handling
         try:
+            # Gets messages from state (defaults to empty list)
             messages = state.get("messages", [])
             
             # Track if we need to add system message
-            # Check if any message is a SystemMessage with our SYSTEM_PROMPT
+            # Checks if system prompt already exists in messages
             has_system_prompt = False
             for msg in messages:
                 if isinstance(msg, SystemMessage):
@@ -99,6 +109,7 @@ class AccountingAgent:
             if not has_system_prompt:
                 messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
             
+            # Debug logging: shows message count and previews
             if self.debug_enabled:
                 logger.debug(f"Calling LLM with {len(messages)} messages")
                 # Log first few messages for debugging
@@ -106,9 +117,10 @@ class AccountingAgent:
                     msg_type = type(msg).__name__
                     content_preview = str(msg.content)[:100] if hasattr(msg, 'content') else str(msg)[:100]
                     logger.debug(f"Message {i} ({msg_type}): {content_preview}...")
-            
+            # Calls LLM with the messages
             response = self.llm.invoke(messages)
             
+            # Debug logging of LLM response
             if self.debug_enabled:
                 logger.debug(f"LLM response type: {type(response)}")
                 if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -117,9 +129,10 @@ class AccountingAgent:
                 elif hasattr(response, 'content'):
                     content_preview = str(response.content)[:100]
                     logger.debug(f"Response content preview: {content_preview}...")
-            
+            # Returns new state with LLM response added
             return {"messages": [response]}
-            
+
+        # Error handling: logs error and returns error message
         except Exception as e:
             logger.error(f"Error in model call: {e}", exc_info=True)
             # Create a proper error message that follows the message format
@@ -128,6 +141,7 @@ class AccountingAgent:
             error_message = AIMessage(content=error_content)
             return {"messages": [error_message]}
     
+    # Method takes `AgentState`, returns `RouteDecision` (string)
     def _should_continue(self, state: AgentState) -> RouteDecision:
         """Determine if the agent should continue to tools or end.
         
@@ -137,11 +151,13 @@ class AccountingAgent:
         Returns:
             Route decision
         """
+        # Gets messages from state
         messages = state.get("messages", [])
+        # If no messages, end
         if not messages:
             logger.warning("No messages in state")
             return "end"
-        
+        # Gets last message
         last_message = messages[-1]
         
         # Check for error messages
@@ -155,6 +171,7 @@ class AccountingAgent:
             if "Model call failed:" in content or "Agent invocation failed:" in content:
                 is_error = True
         
+        # If error, end
         if is_error:
             if self.debug_enabled:
                 logger.info("DECISION: Stop (Error encountered)")
@@ -166,6 +183,7 @@ class AccountingAgent:
             if not isinstance(msg, SystemMessage):
                 step_count += 1
         
+        # Debug logging
         if self.debug_enabled:
             logger.info(f"Step {step_count}: Processing last message")
             if hasattr(last_message, 'content'):
@@ -196,6 +214,7 @@ class AccountingAgent:
             logger.info("DECISION: Stop (Final Answer)")
         return "end"
     
+    # Takes input dictionary, returns result dictionary
     def invoke(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Invoke the agent with input data.
         
@@ -245,6 +264,7 @@ class AccountingAgent:
                 "error": str(e)
             }
 
+    # Debug helper method, returns summary statistics about the state
     def get_agent_state_summary(self, state: AgentState) -> Dict[str, Any]:
         """Get a summary of the current agent state for debugging.
         
@@ -262,6 +282,7 @@ class AccountingAgent:
             "has_tool_calls": hasattr(messages[-1], 'tool_calls') and messages[-1].tool_calls if messages else False
         }
 
+    # Placeholder for state cleanup (not currently used)
     def _cleanup_state(self, state: AgentState) -> AgentState:
         """Clean up the agent state by removing unnecessary data.
         
@@ -277,6 +298,17 @@ class AccountingAgent:
             logger.debug("State cleanup called")
         return state
 
-# Create global agent instance for backward compatibility
+# Create global agent instance for backward compatibility, easy import
+# `agent`: AccountingAgent instance
 agent = AccountingAgent(debug_enabled=Config.ENABLE_DEBUG_PRINTING)
+# `agent_executor`: The compiled executable agent
 agent_executor = agent.agent_executor
+
+# Summary Flow:
+# 1. User calls `agent.invoke()` with messages
+# 2. Input is validated
+# 3. Workflow starts at `agent` node (calls LLM)
+# 4. Decision function checks if tools are needed
+# 5. If tools needed, executes tools, loops back to agent
+# 6. If final answer or error -> ends
+# 7. Returns final result
