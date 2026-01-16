@@ -91,55 +91,81 @@ class AccountingAgent:
         Returns:
             Updated state with model response
         """
-        # Wraps in try-except for error handling
         try:
-            # Gets messages from state (defaults to empty list)
             messages = state.get("messages", [])
+            messages = self._ensure_system_prompt(messages)
             
-            # Track if we need to add system message
-            # Checks if system prompt already exists in messages
-            has_system_prompt = False
-            for msg in messages:
-                if isinstance(msg, SystemMessage):
-                    if msg.content == SYSTEM_PROMPT:
-                        has_system_prompt = True
-                        break
-            
-            # Add system message if not present
-            if not has_system_prompt:
-                messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-            
-            # Debug logging: shows message count and previews
-            if self.debug_enabled:
-                logger.debug(f"Calling LLM with {len(messages)} messages")
-                # Log first few messages for debugging
-                for i, msg in enumerate(messages[:3]):
-                    msg_type = type(msg).__name__
-                    content_preview = str(msg.content)[:100] if hasattr(msg, 'content') else str(msg)[:100]
-                    logger.debug(f"Message {i} ({msg_type}): {content_preview}...")
-            # Calls LLM with the messages
+            self._log_messages_preview(messages)
             response = self.llm.invoke(messages)
+            self._log_response_preview(response)
             
-            # Debug logging of LLM response
-            if self.debug_enabled:
-                logger.debug(f"LLM response type: {type(response)}")
-                if hasattr(response, 'tool_calls') and response.tool_calls:
-                    tool_names = [tc.get('name', 'unknown') for tc in response.tool_calls]
-                    logger.debug(f"Tool calls requested: {tool_names}")
-                elif hasattr(response, 'content'):
-                    content_preview = str(response.content)[:100]
-                    logger.debug(f"Response content preview: {content_preview}...")
-            # Returns new state with LLM response added
             return {"messages": [response]}
-
-        # Error handling: logs error and returns error message
         except Exception as e:
-            logger.error(f"Error in model call: {e}", exc_info=True)
-            # Create a proper error message that follows the message format
-            from langchain_core.messages import AIMessage
-            error_content = f"Model call failed: {str(e)}"
-            error_message = AIMessage(content=error_content)
-            return {"messages": [error_message]}
+            return self._handle_model_error(e)
+    
+    def _ensure_system_prompt(self, messages: list) -> list:
+        """Ensure system prompt is present in messages.
+        
+        Args:
+            messages: List of messages
+            
+        Returns:
+            Messages with system prompt prepended if not present
+        """
+        # Check if system prompt already exists
+        for msg in messages:
+            if isinstance(msg, SystemMessage) and msg.content == SYSTEM_PROMPT:
+                return messages
+        
+        # Add system prompt at the beginning
+        return [SystemMessage(content=SYSTEM_PROMPT)] + messages
+    
+    def _log_messages_preview(self, messages: list) -> None:
+        """Log preview of messages for debugging.
+        
+        Args:
+            messages: List of messages to log
+        """
+        if not self.debug_enabled:
+            return
+        
+        logger.debug(f"Calling LLM with {len(messages)} messages")
+        for i, msg in enumerate(messages[:3]):
+            msg_type = type(msg).__name__
+            content_preview = str(msg.content)[:100] if hasattr(msg, 'content') else str(msg)[:100]
+            logger.debug(f"Message {i} ({msg_type}): {content_preview}...")
+    
+    def _log_response_preview(self, response: Any) -> None:
+        """Log preview of LLM response for debugging.
+        
+        Args:
+            response: LLM response object
+        """
+        if not self.debug_enabled:
+            return
+        
+        logger.debug(f"LLM response type: {type(response)}")
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            tool_names = [tc.get('name', 'unknown') for tc in response.tool_calls]
+            logger.debug(f"Tool calls requested: {tool_names}")
+        elif hasattr(response, 'content'):
+            content_preview = str(response.content)[:100]
+            logger.debug(f"Response content preview: {content_preview}...")
+    
+    def _handle_model_error(self, error: Exception) -> Dict[str, Any]:
+        """Handle errors during model call.
+        
+        Args:
+            error: Exception that occurred
+            
+        Returns:
+            State with error message
+        """
+        logger.error(f"Error in model call: {error}", exc_info=True)
+        from langchain_core.messages import AIMessage
+        error_content = f"Model call failed: {str(error)}"
+        error_message = AIMessage(content=error_content)
+        return {"messages": [error_message]}
     
     # Method takes `AgentState`, returns `RouteDecision` (string)
     def _should_continue(self, state: AgentState) -> RouteDecision:
@@ -203,10 +229,9 @@ class AccountingAgent:
             return "tools"
         
         # Check for maximum steps to prevent infinite loops
-        max_steps = getattr(Config, 'MAX_AGENT_STEPS', 10)
-        if step_count >= max_steps:
+        if step_count >= Config.MAX_AGENT_STEPS:
             if self.debug_enabled:
-                logger.warning(f"DECISION: Stop (Max steps {max_steps} reached)")
+                logger.warning(f"DECISION: Stop (Max steps {Config.MAX_AGENT_STEPS} reached)")
             return "end"
         
         # Default to end if no tool calls
@@ -227,7 +252,28 @@ class AccountingAgent:
         Raises:
             ValueError: If input validation fails
         """
-        # Input validation
+        self._validate_input(input_data)
+        
+        if self.debug_enabled:
+            logger.info(f"Agent invoked with input keys: {list(input_data.keys())}")
+            logger.debug(f"Number of initial messages: {len(input_data.get('messages', []))}")
+        
+        try:
+            result = self.agent_executor.invoke(input_data)
+            self._log_result_preview(result)
+            return result
+        except Exception as e:
+            return self._handle_invocation_error(e)
+    
+    def _validate_input(self, input_data: Dict[str, Any]) -> None:
+        """Validate input data for agent invocation.
+        
+        Args:
+            input_data: Input data to validate
+            
+        Raises:
+            ValueError: If validation fails
+        """
         if not isinstance(input_data, dict):
             raise ValueError("input_data must be a dictionary")
         
@@ -236,33 +282,39 @@ class AccountingAgent:
         
         if not isinstance(input_data["messages"], list):
             raise ValueError("input_data['messages'] must be a list")
+    
+    def _log_result_preview(self, result: Dict[str, Any]) -> None:
+        """Log preview of agent result for debugging.
         
-        if self.debug_enabled:
-            logger.info(f"Agent invoked with input: {list(input_data.keys())}")
-            logger.debug(f"Number of initial messages: {len(input_data.get('messages', []))}")
+        Args:
+            result: Agent result to log
+        """
+        if not self.debug_enabled:
+            return
         
-        try:
-            result = self.agent_executor.invoke(input_data)
+        logger.info("Agent completed successfully")
+        if "messages" in result and result["messages"]:
+            final_message = result["messages"][-1]
+            if hasattr(final_message, 'content'):
+                content_preview = str(final_message.content)[:200]
+                logger.debug(f"Final response preview: {content_preview}...")
+            else:
+                logger.debug(f"Final message type: {type(final_message).__name__}")
+    
+    def _handle_invocation_error(self, error: Exception) -> Dict[str, Any]:
+        """Handle errors during agent invocation.
+        
+        Args:
+            error: Exception that occurred
             
-            if self.debug_enabled:
-                logger.info("Agent completed successfully")
-                if "messages" in result and result["messages"]:
-                    final_message = result["messages"][-1]
-                    if hasattr(final_message, 'content'):
-                        content_preview = str(final_message.content)[:200]
-                        logger.debug(f"Final response preview: {content_preview}...")
-                    else:
-                        logger.debug(f"Final message type: {type(final_message).__name__}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error invoking agent: {e}", exc_info=True)
-            # Return structured error instead of raising
-            return {
-                "messages": [{"content": f"Agent invocation failed: {str(e)}", "type": "error"}],
-                "error": str(e)
-            }
+        Returns:
+            Structured error response
+        """
+        logger.error(f"Error invoking agent: {error}", exc_info=True)
+        return {
+            "messages": [{"content": f"Agent invocation failed: {str(error)}", "type": "error"}],
+            "error": str(error)
+        }
 
     # Debug helper method, returns summary statistics about the state
     def get_agent_state_summary(self, state: AgentState) -> Dict[str, Any]:
@@ -281,22 +333,6 @@ class AccountingAgent:
             "last_message_type": type(messages[-1]).__name__ if messages else None,
             "has_tool_calls": hasattr(messages[-1], 'tool_calls') and messages[-1].tool_calls if messages else False
         }
-
-    # Placeholder for state cleanup (not currently used)
-    def _cleanup_state(self, state: AgentState) -> AgentState:
-        """Clean up the agent state by removing unnecessary data.
-        
-        Args:
-            state: Current agent state
-            
-        Returns:
-            Cleaned up state
-        """
-        # This is a placeholder for future state cleanup logic
-        # For now, just return the state as-is
-        if self.debug_enabled:
-            logger.debug("State cleanup called")
-        return state
 
 # Create global agent instance for backward compatibility, easy import
 # `agent`: AccountingAgent instance

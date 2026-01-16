@@ -25,6 +25,8 @@ class Config:
     
     # Logging
     ENABLE_DEBUG_PRINTING = True
+
+    MAX_AGENT_STEPS: int = 10
     
     @classmethod
     def validate(cls) -> None:

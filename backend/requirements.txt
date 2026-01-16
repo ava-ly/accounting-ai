@@ -4,6 +4,7 @@ python-dotenv
 google-generativeai
 langchain-google-genai
 langchain-community
+langchain_groq
 langgraph
 supabase
 pypdf
