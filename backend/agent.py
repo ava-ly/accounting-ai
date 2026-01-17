@@ -22,8 +22,6 @@ from prompts import SYSTEM_PROMPT
 from agent_types import AgentState, RouteDecision
 # import tools for fallback
 from tools import search_accounting_law, calculate_vat
-# import tools for fallback
-from tools import search_accounting_law, calculate_vat
 
 # Configure logging
 # set up basic logging configuration to INFO level
