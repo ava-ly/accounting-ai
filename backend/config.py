@@ -34,11 +34,16 @@ class Config:
         if not cls.GROQ_API_KEY:
             raise ValueError("GROQ_API_KEY environment variable is required")
 
-def create_llm() -> ChatGroq:
-    """Create and configure the LLM instance."""
+def create_llm(tools=None) -> ChatGroq:
+    """Create and configure the LLM instance.
+    
+    Args:
+        tools: Optional list of tools to bind. If None, uses Config.TOOLS
+    """
     Config.validate()
+    tools_to_bind = tools if tools is not None else Config.TOOLS
     return ChatGroq(
         model=Config.MODEL_NAME,
         temperature=Config.TEMPERATURE,
         api_key=Config.GROQ_API_KEY
-    ).bind_tools(Config.TOOLS)
+    ).bind_tools(tools_to_bind)

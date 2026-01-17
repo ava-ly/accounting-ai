@@ -20,6 +20,10 @@ from config import Config, create_llm
 from prompts import SYSTEM_PROMPT
 # import custom types: 'AgentState' for state structure, 'RouteDecision' for routing
 from agent_types import AgentState, RouteDecision
+# import tools for fallback
+from tools import search_accounting_law, calculate_vat
+# import tools for fallback
+from tools import search_accounting_law, calculate_vat
 
 # Configure logging
 # set up basic logging configuration to INFO level
@@ -41,10 +45,34 @@ class AccountingAgent:
         """
         # store debug flag
         self.debug_enabled = debug_enabled
-        # create llm instance using imported function
-        self.llm = create_llm()
-        # create toolnode with tools from Config
-        self.tool_node = ToolNode(Config.TOOLS)
+        
+        # Get tools, handling potential issues
+        tools = []
+        try:
+            tools = Config.TOOLS
+            if not tools:
+                raise ValueError("Config.TOOLS is empty")
+            logger.info(f"Loaded {len(tools)} tools from Config")
+        except Exception as e:
+            logger.error(f"Failed to get tools from Config: {e}")
+            # Fallback to directly imported tools
+            tools = [search_accounting_law, calculate_vat]
+            logger.warning(f"Using fallback tools: {[t.name for t in tools if hasattr(t, 'name')]}")
+        
+        # Log tool names for debugging
+        if self.debug_enabled:
+            tool_names = []
+            for tool in tools:
+                if hasattr(tool, 'name'):
+                    tool_names.append(tool.name)
+                else:
+                    tool_names.append(str(tool))
+            logger.info(f"Available tools: {tool_names}")
+        
+        # create llm instance using imported function, passing the same tools
+        self.llm = create_llm(tools)
+        # create toolnode with tools
+        self.tool_node = ToolNode(tools)
         # build the workflow graph
         self.workflow = self._build_workflow()
         # compile the graph into an executable agent
