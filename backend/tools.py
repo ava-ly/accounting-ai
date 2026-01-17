@@ -1,130 +1,229 @@
-import os
-from dotenv import load_dotenv
-from supabase import create_client
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-# from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.tools import tool
-from typing import Optional, Tuple, Union
+"""This file provides tools for an AI agent to interact with a database of accounting laws and perform VAT calculations. """
 
-# Setup
-_env_loaded = False
-_supabase = None
-_embeddings = None
+import os #for accessing environment variables
+import logging
+from dotenv import load_dotenv #loads env variable from .env file
+from supabase import create_client #creates a connection to Supabase
+from langchain_google_genai import GoogleGenerativeAIEmbeddings #generates vector embeddings
+from langchain_core.tools import tool #decorator to create LangChain tools that AI agents can use
+from typing import Optional, Tuple, Union #type hints for better code docs
+from functools import wraps
 
+# Configure logging
+logger = logging.getLogger(__name__)
 
-def _ensure_initialized() -> Tuple[object, GoogleGenerativeAIEmbeddings]:
-    global _env_loaded, _supabase, _embeddings
+# Custom Exceptions
+class ToolError(Exception):
+    """Base exception for tool-related errors."""
+    pass
 
-    if not _env_loaded:
+class DatabaseError(ToolError):
+    """Exception for database-related errors."""
+    pass
+
+class ValidationError(ToolError):
+    """Exception for input validation errors."""
+    pass
+
+# Configuration
+class ToolConfig:
+    """Configuration constants for tools."""
+    MATCH_THRESHOLD = 0.5
+    MATCH_COUNT = 10
+    DEFAULT_VAT_RATE = 8
+    MIN_QUERY_LENGTH = 2
+
+# Singleton Database Client
+class DatabaseClient:
+    """Thread-safe singleton client for database operations."""
+    _instance = None
+    _initialized = False
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    def __init__(self):
+        if not self._initialized:
+            self._initialized()
+            self._initialized = True
+    
+    def _initialize(self):
+        """Initialize database connection and embeddings."""
         load_dotenv()
-        _env_loaded = True
 
-    if _supabase is None:
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
+        # Initialize Supabase
+        supabase_url = os.getenv("SUPABASE_URL") #get URL from .env
+        supabase_key = os.getenv("SUPABASE_KEY") #get key from .env
         if not supabase_url or not supabase_key:
             raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY in environment")
-        _supabase = create_client(supabase_url, supabase_key)
+        self.supabase = create_client(supabase_url, supabase_key) #create the client
 
-    if _embeddings is None:
-        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        # Initialize embeddings
+        gemini_api_key = os.getenv("GEMINI_API_KEY") #get API key from environment
         if not gemini_api_key:
-            raise RuntimeError("Missing GEMINI_API_KEY in environment")
-        _embeddings = GoogleGenerativeAIEmbeddings(
+            raise RuntimeError("Missing GEMINI_API_KEY in environment") # raise error if missing
+        #initialize the embeddings model with specific settings
+        self.embeddings = GoogleGenerativeAIEmbeddings(
             model="models/text-embedding-004",
             google_api_key=gemini_api_key,
         )
 
-    return _supabase, _embeddings
+    def get_client(self):
+        """Get the Supabase client."""
+        return self.supabase
 
-# Define the tool
+    def get_embeddings(self):
+        """Get the embeddings model."""
+        return self.embeddings
+
+# Helper Functions
+def parse_numeric_input(value: Union[str, float, int]) -> float:
+    """Parse and clean numeric input from various formats."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    # Clean string input
+    cleaned = str(value).strip()
+    cleaned = cleaned.replace(",", "").replace("_", "")
+    cleaned = cleaned.replace("k", "000").replace("K", "000")
+    cleaned = cleaned.replace("%", "")
+
+    try:
+        return float(cleaned)
+    except ValueError:
+        raise ValidationError(f"Cannot parse numeric value: {value}")
+
+def format_document_result(doc: dict) -> str:
+    """Format a single document result for AI consumption."""
+    meta = doc.get('metadata') or {}
+    domain = meta.get('domain', 'GENERAL')
+    priority = meta.get('priority_label', 'LEGACY')
+
+    return (
+        f"[{domain}] [{priority}]\n"
+        f"DOCUMENT: {meta.get('official_name', 'Unknown')}\n"
+        f"EFFECTIVE: {meta.get('effective_date', 'Unknown')}\n"
+        f"CONTENT: {doc.get('content', '')}\n"
+        "--------------------------------------------------"
+    )
+
+def validate_search_query(func):
+    """Decorator to validate search query input."""
+    @wraps(func)
+    def wrapper(query: str):
+        if not query or not query.strip():
+            raise ValidationError("Search query cannot be empty")
+        if len(query.strip()) < ToolConfig.MIN_QUERY_LENGTH:
+            raise ValidationError(f"Search query too short (minimum {ToolConfig.MIN_QUERY_LENGTH} characters)")
+        return func(query.strip())
+    return wrapper
+
+# Database Operations
+def search_documents(query: str, db_client: DatabaseClient) -> list:
+    """Search documents in the database"""
+    try:
+        embeddings = db_client.get_embeddings()
+        query_vector = embeddings.embed_query(query)
+
+        supabase = db_client.get_client()
+        response = supabase.rpc(
+            "match_documents",
+            {
+                "query_embedding": query_vector,
+                "match_threshold": ToolConfig.MATCH_THRESHOLD,
+                "match_count": ToolConfig.MATCH_COUNT
+            }
+        ).execute()
+
+        return response.database
+    except Exception as e:
+        logger.error(f"Database search error: {e}")
+        raise DatabaseError(f"Failed to search documents: {str(e)}")
+
+def format_search_results(documents: list) -> str:
+    """Format search results for AI consumption."""
+    if not documents:
+        return "SYSTEM: No relevant documents found. Do not answer from memory."
+
+    formatted_results = []
+    for doc in documents:
+        formatted_results.append(format_document_result(doc))
+
+    return "\n".join(formatted_results)
+
+# Tool Definitions
 @tool
+@validate_search_query
 def search_accounting_law(query: str):
     """
     Use this tool to find information about Vietnamese Accounting Laws, 
     Circulars (like Circular 200), Tax regulations, or specific Accounts (TK 111, etc).
     Input should be a search query like "Definition of Account 111".
     """
-    print(f"Agent is searching database for: {query}")
+    logger.info(f"Agent is searching database for: {query}")
 
     try:
-        supabase, embeddings = _ensure_initialized()
+        # Initialize database client
+        db_client = DatabaseClient()
 
-        # Generate vector
-        query_vector = embeddings.embed_query(query)
+        # Search documents
+        documents = search_documents(query, db_client)
 
-        # Search Supabase
-        response = supabase.rpc(
-            "match_documents",
-            {
-                "query_embedding": query_vector,
-                "match_threshold": 0.5,
-                "match_count": 10
-            }
-        ).execute()
+        # Log results
+        if documents:
+            logger.info(f"Found {len(documents)} relevant documents")
+        else:
+            logger.info("No documents found matching the query")
 
-        # Format results for AI to read
-        if not response.data:
-            print("Database returned 0 matches (below threshold).")
-            return "SYSTEM: No relevant documents found. Do not answer from memory."
+        # Format and return results
+        return format_search_results(documents)
 
-        # Format for Gemini
-        formatted_results = []
-        for d in response.data:
-            meta = d.get('metadata') or {}
-
-            # Check Priority
-            domain = meta.get('domain', 'GENERAL')
-            priority = meta.get('priority_label', 'LEGACY')
-
-            # # Visual Marker for the AI
-            # domain_tag = f"[{domain}]"
-            # status_line = ""
-            # if label == "LATEST":
-            #     status_line = "STATUS: PRIMARY AUTHORITY (LATEST LAW)"
-            # else:
-            #     status_line = "STATUS: REFERENCE ONLY (OLD LAW)"
-            
-            entry = (
-                f"[{domain}] [{priority}]\n"
-                f"DOCUMENT: {meta.get('official_name')}\n"
-                f"EFFECTIVE: {meta.get('effective_date')}\n"
-                f"CONTENT: {d.get('content')}\n"
-                "--------------------------------------------------"
-            )
-            formatted_results.append(entry)
-            
-        print(f"Selected Top {len(formatted_results)} highest quality docs.")
-        return "\n".join(formatted_results)
-
+    except ValidationError as e:
+        logger.warning(f"Validation error: {e}")
+        return f"Validation error: {str(e)}"
+    except DatabaseError as e:
+        logger.error(f"Database error: {e}")
+        return f"Database error: {str(e)}"
     except Exception as e:
-        print(f"Error: {e}")
-        return f"Error searching database: {str(e)}"
+        logger.error(f"Unexpected error in search_accounting_law: {e}")
+        return f"Unexpected error: {str(e)}"
 
 @tool
-def calculate_vat(amount: Union[str, float, int], rate_percent: Union[str, float, int] = 8):
+def calculate_vat(amount: Union[str, float, int], rate_percent: Union[str, float, int] = ToolConfig.DEFAULT_VAT_RATE):
     """
     Use this tool to calculate VAT (Value Added Tax) or generic percentages.
     Input: amount (number), rate_percent (number, default is 8).
     """
     try:
-        # 1. Clean the input (remove commas, 'k', etc)
-        # Llama might send "100,000" or "100k"
-        s_amount = str(amount).replace(",", "").replace("_", "")
-        s_amount = s_amount.replace("k", "000").replace("K", "000")
-        s_rate = str(rate_percent).replace("%", "")
-
-        # 2. Convert to float
-        f_amount = float(s_amount)
-        f_rate = float(s_rate)
-
-        print(f"Agent is calculating VAT: {f_amount} * {f_rate}%")
+        # Parse inputs
+        f_amount = parse_numeric_input(amount)
+        f_rate = parse_numeric_input(rate_percent)
         
+        # Validate inputs
+        if f_amount < 0:
+            raise ValidationError("Amount cannot be negative")
+        if f_rate < 0 or f_rate > 100:
+            raise ValidationError("Rate must be between 0 and 100 percent")
+        
+        logger.info(f"Agent is calculating VAT: {f_amount} * {f_rate}%")
+        
+        # Calculate VAT
         tax = f_amount * (f_rate / 100)
         total = f_amount + tax
+        
+        # Format result
         return f"Amount: {f_amount:,.0f} | Tax ({f_rate}%): {tax:,.0f} | Total: {total:,.0f}"
-
-    except ValueError:
-        return "Error: Please provide valid numbers for calculation."
+        
+    except ValidationError as e:
+        logger.warning(f"Validation error in calculate_vat: {e}")
+        return f"Validation error: {str(e)}"
     except Exception as e:
+        logger.error(f"Unexpected error in calculate_vat: {e}")
         return f"Error: {str(e)}"
+
+# Summary: This file provides two main tools for an AI accounting agent:
+# 1. `search_accounting_law`: Performs semantic search in a database of Vietnamese accounting documents using vector embeddings
+# 2. `calculate_vat`: Calculates Value Added Tax with flexible input formats
+# The tools are designed to be used by an AI agent (through LangChain/LangGraph) to access specific knowledge and perform calculations without relying on the AI's internal knowledge, ensuring accurate, up-to-date information from verified sources.
