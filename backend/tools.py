@@ -46,8 +46,8 @@ class DatabaseClient:
     
     def __init__(self):
         if not self._initialized:
-            self._initialized()
-            self._initialized = True
+            self._initialize()
+            DatabaseClient._initialized = True
     
     def _initialize(self):
         """Initialize database connection and embeddings."""
@@ -112,12 +112,26 @@ def format_document_result(doc: dict) -> str:
 def validate_search_query(func):
     """Decorator to validate search query input."""
     @wraps(func)
-    def wrapper(query: str):
+    def wrapper(*args, **kwargs):
+        # The query should be the first argument
+        if args:
+            query = args[0]
+        elif 'query' in kwargs:
+            query = kwargs['query']
+        else:
+            raise ValidationError("Search query not found in arguments")
+        
         if not query or not query.strip():
             raise ValidationError("Search query cannot be empty")
         if len(query.strip()) < ToolConfig.MIN_QUERY_LENGTH:
             raise ValidationError(f"Search query too short (minimum {ToolConfig.MIN_QUERY_LENGTH} characters)")
-        return func(query.strip())
+        
+        # Update the query in kwargs
+        if 'query' in kwargs:
+            kwargs['query'] = query.strip()
+            return func(**kwargs)
+        else:
+            return func(query.strip(), *args[1:])
     return wrapper
 
 # Database Operations
@@ -137,7 +151,12 @@ def search_documents(query: str, db_client: DatabaseClient) -> list:
             }
         ).execute()
 
-        return response.database
+        # Supabase returns data in response.data
+        if hasattr(response, 'data'):
+            return response.data
+        else:
+            # Try to access it directly
+            return []
     except Exception as e:
         logger.error(f"Database search error: {e}")
         raise DatabaseError(f"Failed to search documents: {str(e)}")
