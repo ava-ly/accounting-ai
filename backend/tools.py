@@ -1,13 +1,13 @@
 """This file provides tools for an AI agent to interact with a database of accounting laws and perform VAT calculations. """
 
 import os #for accessing environment variables
-import logging
+import logging #logging messages at different severity levels
 from dotenv import load_dotenv #loads env variable from .env file
 from supabase import create_client #creates a connection to Supabase
 from langchain_google_genai import GoogleGenerativeAIEmbeddings #generates vector embeddings
 from langchain_core.tools import tool #decorator to create LangChain tools that AI agents can use
 from typing import Optional, Tuple, Union #type hints for better code docs
-from functools import wraps
+from functools import wraps #decorator to preserve function metadata when creating decorators
 
 # Configure logging
 logger = logging.getLogger(__name__)
