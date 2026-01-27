@@ -51,9 +51,22 @@ async def chat_endpoint(req: ChatRequest):
         )
 
         # Extract the Final Answer
-        last_message = result["messages"][-1]
-        raw_content = last_message.content
-
+        # The result may be a dict with 'messages' key
+        messages = result.get("messages", [])
+        if not messages:
+            raise HTTPException(status_code=500, detail="Agent returned no messages")
+        
+        last_message = messages[-1]
+        
+        # Extract content from last message
+        raw_content = None
+        if hasattr(last_message, 'content'):
+            raw_content = last_message.content
+        elif isinstance(last_message, dict):
+            raw_content = last_message.get('content')
+        else:
+            raw_content = str(last_message)
+        
         # CHECK: Is it a simple string or a list of blocks?
         if isinstance(raw_content, str):
             final_answer = raw_content
@@ -61,7 +74,7 @@ async def chat_endpoint(req: ChatRequest):
             # It's a list like [{"type": "text", "text": "..."}]
             # We join all the text parts together
             final_answer = "".join(
-                [block["text"] for block in raw_content if "text" in block]
+                [block.get("text", "") for block in raw_content if isinstance(block, dict) and "text" in block]
             )
         else:
             # Fallback for unknown formats

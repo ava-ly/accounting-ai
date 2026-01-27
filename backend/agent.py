@@ -125,7 +125,8 @@ class AccountingAgent:
             response = self.llm.invoke(messages)
             self._log_response_preview(response)
             
-            return {"messages": [response]}
+            # Append the response to existing messages
+            return {"messages": messages + [response]}
         except Exception as e:
             return self._handle_model_error(e)
     
@@ -243,10 +244,17 @@ class AccountingAgent:
                 logger.debug(f"Message preview: {content_preview}...")
         
         # Check if the LLM wants to call tools
-        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+        # Handle both dictionary and object cases
+        tool_calls = None
+        if isinstance(last_message, dict):
+            tool_calls = last_message.get('tool_calls')
+        elif hasattr(last_message, 'tool_calls'):
+            tool_calls = last_message.tool_calls
+        
+        if tool_calls:
             if self.debug_enabled:
                 tool_names = []
-                for tc in last_message.tool_calls:
+                for tc in tool_calls:
                     if isinstance(tc, dict):
                         tool_names.append(tc.get('name', 'unknown'))
                     else:
