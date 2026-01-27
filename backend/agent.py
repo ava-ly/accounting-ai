@@ -125,8 +125,8 @@ class AccountingAgent:
             response = self.llm.invoke(messages)
             self._log_response_preview(response)
             
-            # Append the response to existing messages
-            return {"messages": messages + [response]}
+            # Return only the new response to append to state
+            return {"messages": [response]}
         except Exception as e:
             return self._handle_model_error(e)
     
