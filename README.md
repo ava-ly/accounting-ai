@@ -1,4 +1,4 @@
-## Project Architecture Diagram
+# Project Architecture Diagram
 
 ![Project Architecture Diagram](./assets/accounting-ai-diagram.png)
 
