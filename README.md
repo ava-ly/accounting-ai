@@ -132,6 +132,3 @@ Exception → Logging → Graceful Response:
 - **Dependencies**: Managed via requirements.txt
 - **Scalability**: Stateless agent execution allows horizontal scaling
 - **Security**: CORS configured, API keys in environment
-
-
-*This architecture ensures a robust, maintainable system that follows RAG principles while providing accurate accounting information through tool usage.*
