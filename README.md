@@ -4,6 +4,10 @@
 
 ## Key Components and Their Roles
 
+```
+User → Frontend → API → Agent → LLM → Tools → Database → Response
+```
+
 ### 1. **Frontend (React/TypeScript)**
 - Provides chat interface
 - Manages conversation history
